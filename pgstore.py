@@ -20,30 +20,32 @@ class FTPBackend(object):
     def _connect(self):
         return ftplib.FTP(self.host, self.user, self.passwd)
 
-    def archive(self, file, name, type, overwrite=False):
+    def archive(self, fileobj, name, bktype, overwrite=False):
         ftp = self._connect()
         try:
-            ftp.cwd('%s/%s' % (self.path, type))
+            ftp.cwd('%s/%s' % (self.path, bktype))
         except ftplib.error_perm:
             ftp.cwd(self.path)
-            ftp.mkd(type)
-            ftp.cwd('%s/%s' % (self.path, type))
+            ftp.mkd(bktype)
+            ftp.cwd('%s/%s' % (self.path, bktype))
         if not overwrite and name in ftp.nlst():
+            fileobj.close()
+            ftp.quit()
             raise Exception('File aready backed up!')
-        ftp.storbinary('STOR %s' % name, file)
-        file.close()
+        ftp.storbinary('STOR %s' % name, fileobj)
+        fileobj.close()
         ftp.quit()
 
-    def restore(self, file, name, type):
+    def restore(self, fileobj, name, bktype):
         ftp = self._connect()
-        ftp.cwd('%s/%s' % (self.path, type))
+        ftp.cwd('%s/%s' % (self.path, bktype))
         try:
-            ftp.retrbinary('RETR %s' % name, file.write)
+            ftp.retrbinary('RETR %s' % name, fileobj.write)
         except ftplib.error_perm:
-            os.remove(path)
             raise
-        file.close()
-        ftp.quit()
+        finally:
+            fileobj.close()
+            ftp.quit()
 
 
 def get_store_config(config, section, defaults={}):
@@ -72,12 +74,12 @@ def main():
     config = SafeConfigParser()
     config.read(options.conf)
 
-    type = config.get(options.store, 'type')
-    if type == 'ftp':
+    sttype = config.get(options.store, 'type')
+    if sttype == 'ftp':
         store_config = get_store_config(config, options.store, {'path': '/'})
         bkend = FTPBackend(**store_config)
     else:
-        raise Exception('Storage type "%s" not recognised!' % type)
+        raise Exception('Storage type "%s" not recognised!' % sttype)
 
     try:
         action = args[0]
