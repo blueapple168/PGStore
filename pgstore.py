@@ -123,7 +123,7 @@ def main():
 
         elif action == 'archive-base':
             ref = 'base-%s' % date.today()
-            pg_cmd('SELECT * FROM pg_start_backup(%s)' % ref)
+            pg_cmd('SELECT * FROM pg_start_backup(\'%s\')' % ref)
 
             def exclude(name):
                 if name == 'pg_xlog': return True
