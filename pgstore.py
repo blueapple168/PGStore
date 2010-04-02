@@ -4,8 +4,9 @@ import os
 import commands
 import ftplib
 import tarfile
+import gzip
 from datetime import date
-from tempfile import mkstemp
+from tempfile import TemporaryFile, mkstemp
 from ConfigParser import SafeConfigParser
 from optparse import OptionParser
 
@@ -29,11 +30,9 @@ class FTPBackend(object):
             ftp.mkd(bktype)
             ftp.cwd('%s/%s' % (self.path, bktype))
         if not overwrite and name in ftp.nlst():
-            fileobj.close()
             ftp.quit()
             raise Exception('File aready backed up!')
         ftp.storbinary('STOR %s' % name, fileobj)
-        fileobj.close()
         ftp.quit()
 
     def restore(self, fileobj, name, bktype):
@@ -41,10 +40,7 @@ class FTPBackend(object):
         ftp.cwd('%s/%s' % (self.path, bktype))
         try:
             ftp.retrbinary('RETR %s' % name, fileobj.write)
-        except ftplib.error_perm:
-            raise
         finally:
-            fileobj.close()
             ftp.quit()
 
 
@@ -61,6 +57,15 @@ def pg_cmd(cmd):
     if status != 0:
         raise Exception(stdout)
     return stdout.strip()
+
+
+def gz(fileobj):
+    tmpfile = TemporaryFile()
+    fout = gzip.GzipFile(fileobj=tmpfile)
+    fout.writelines(fileobj)
+    fout.close()
+    tmpfile.seek(0)
+    return tmpfile
 
 
 def main():
@@ -93,9 +98,14 @@ def main():
         except ValueError:
             parser.error('Need both path and name!')
         if action == 'archive-wal':
-            bkend.archive(open(path, 'rb'), name, 'wal')
+            bkend.archive(gz(open(path, 'rb')), '%s.gz' % name, 'wal')
         else:
-            bkend.restore(open(path, 'wb'), name, 'wal')
+            tmpfile_name = mkstemp()[1]
+            tmpfile = open(tmpfile_name, 'wb')
+            bkend.restore(tmpfile, '%s.gz' % name, 'wal')
+            tmpfile.close()
+            open(path, 'wb').write(gzip.open(tmpfile_name, 'rb').read())
+            os.remove(tmpfile_name)
 
     elif action in ('archive-current', 'archive-base'):
         parser.set_usage('%%prog %s [datadir]' % action)
@@ -109,7 +119,7 @@ def main():
                 'SELECT * FROM pg_xlogfile_name(pg_current_xlog_location())'
             )
             path = os.path.join(datadir, 'pg_xlog', name)
-            bkend.archive(open(path, 'rb'), 'current', 'wal', overwrite=True)
+            bkend.archive(gz(open(path, 'rb')), 'current.gz', 'wal', overwrite=True)
 
         elif action == 'archive-base':
             ref = 'base-%s' % date.today()
