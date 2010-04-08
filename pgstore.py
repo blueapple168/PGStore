@@ -46,7 +46,9 @@ class FTPBackend(object):
 
 def get_store_config(config, section, defaults={}):
     conf = {}
-    for (key, val) in config.items(section, vars=defaults):
+    for (key, val) in defaults.items():
+        conf[key] = val
+    for (key, val) in config.items(section):
         if key != 'type':
             conf[key] = val
     return conf
