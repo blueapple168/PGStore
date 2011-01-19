@@ -127,11 +127,11 @@ def main():
             ref = 'base-%s' % date.today()
             pg_cmd('SELECT * FROM pg_start_backup(\'%s\')' % ref)
 
-            def exclude(name):
-                if name == 'pg_xlog': return True
             tmpfile_name = mkstemp()[1]
             tar = tarfile.open(fileobj=open(tmpfile_name, 'wb'), mode='w:gz')
-            tar.add(datadir, arcname='/data', exclude=exclude)
+            for filename in os.listdir(datadir):
+                if filename != 'pg_xlog':
+                    tar.add(os.path.join(datadir, filename), arcname=filename)
             tar.close()
 
             pg_cmd('SELECT * FROM pg_stop_backup()')
