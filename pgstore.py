@@ -95,7 +95,7 @@ class SSHBackend(object):
         cmd.append('|')
         cmd.append('ssh -qp %i %s@%s' % (int(self.port), self.user, self.host))
         #cmd.append('"tar xzf - -C %s"' % path.dirname(dest_path))
-        cmd.append('"dd of=%s"' % dest_path)
+        cmd.append('"mkdir -p %s && dd of=%s"' % (path.dirname(dest_path), dest_path))
         run(' '.join(cmd))
 
     def exist(self, name):
