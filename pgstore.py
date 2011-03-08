@@ -290,7 +290,7 @@ def archive_base(data_dir, bkend, db_user, ref=None):
     """
 
     if not ref:
-        ref = str(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()))
+        ref = str(time.strftime('%Y-%m-%d-%H:%M:%S', time.gmtime()))
 
     try:
         pg_cmd('SELECT * FROM pg_start_backup(\'%s\')' % ref, db_user)
