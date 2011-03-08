@@ -18,7 +18,6 @@ import gzip
 import subprocess
 import time
 from os import path
-from datetime import date
 from tempfile import NamedTemporaryFile, mkstemp
 from ConfigParser import SafeConfigParser, NoOptionError
 from optparse import OptionParser
@@ -291,9 +290,9 @@ def archive_base(data_dir, bkend, db_user, ref=None):
     """
 
     if not ref:
-        ref = str(date.today())
+        ref = str(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()))
 
-    try:        
+    try:
         pg_cmd('SELECT * FROM pg_start_backup(\'%s\')' % ref, db_user)
         name = path.join('base', ref)
         bkend.put(data_dir, name, exclude='pg_xlog', overwrite=False)
