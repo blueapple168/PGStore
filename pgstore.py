@@ -296,6 +296,7 @@ def archive_base(data_dir, bkend, db_user, ref=None):
         pg_cmd('SELECT * FROM pg_start_backup(\'%s\')' % ref, db_user)
         name = path.join('base', ref)
         bkend.put(data_dir, name, exclude='pg_xlog', overwrite=False)
+        print('Created base archive: %s' % ref)
     finally:
         pg_cmd('SELECT * FROM pg_stop_backup()', db_user)
 
