@@ -282,7 +282,7 @@ def restore_wal(file_path, file_name, bkend):
         if path.exists('/tmp/halt-postgres-recovery.tmp'):
             raise PGError('Recovery halted')
 
-        time.sleep(0.1)
+        time.sleep(0.5)
 
 
 def archive_base(data_dir, bkend, db_user, ref=None):
