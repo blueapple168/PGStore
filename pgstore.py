@@ -96,7 +96,8 @@ class SSHBackend(object):
         cmd.append('ssh -qp %i %s@%s' % (int(self.port), self.user, self.host))
         #cmd.append('"tar xzf - -C %s"' % path.dirname(dest_path))
         cmd.append('"mkdir -p %s && dd of=%s"' % (path.dirname(dest_path), dest_path))
-        run(' '.join(cmd))
+        if run(' '.join(cmd)).returncode != 0:
+            raise SaveError('Could not save file: %s' % dest_name)
 
     def exist(self, name):
         """
