@@ -13,159 +13,31 @@ import os
 import sys
 import pwd
 import commands
-import tarfile
-import gzip
 import subprocess
 import time
+import tarfile
 from os import path
-from tempfile import NamedTemporaryFile, mkstemp
+from tempfile import mkstemp
 from ConfigParser import SafeConfigParser, NoOptionError
 from optparse import OptionParser
-from urlparse import urlparse
-from shutil import copyfile, rmtree
+from shutil import rmtree
+from bz2 import compress, decompress
 
 
-class SaveError(Exception):
-    pass
+try:
+    from fs.base import FS
+    from fs.opener import fsopendir
+    from fs.errors import ResourceNotFoundError
+except ImportError:
+    print('pyFilesystem is required')
+    sys.exit(1)
 
-class URLError(Exception):
+
+class TransferError(Exception):
     pass
 
 class PGError(Exception):
     pass
-
-class LocalBackend(object):
-    """
-    An local filesystem backend
-    """
-
-    def __init__(self, base_dir):
-        self._base_dir = base_dir
-
-    def put(self, file_path, name, overwrite=False):
-        """
-        Archive file
-        """
-        
-        raise NotImplementedError
-
-    def fetch(self, file_path, name):
-        """
-        Restore file
-        """
-
-        copyfile(self._get_path(name), file_path)
-
-    def _get_path(self, name):
-        """
-        Return full path from name
-        """
-
-        return path.join(self._base_dir, name)
-
-
-class SSHBackend(object):
-    """
-    An ssh backend to copy files over ssh
-    """
-
-    def __init__(self, host, user, path, port=22):
-        self.host = host
-        self.user = user
-        self.path = path
-        self.port = port
-
-    def put(self, file_path, dest_name, overwrite=False, exclude=None):
-        """
-        Archive file to ssh server
-        """
-
-        dest_path = self._get_dest_path(dest_name)
-        file_path, file_name = path.split(file_path)
-
-        if overwrite == False and self.exist(dest_name):
-            raise SaveError('File already exist')
-        
-        cmd = ['tar cz', '-C %s' % file_path]
-        if exclude:
-             cmd.append('--exclude %s' % exclude)
-        #if file_name != path.basename(dest_name):
-            #cmd.append('--xform=s/%s/%s/' % (file_name, path.basename(dest_name)))
-        cmd.append(file_name)
-        cmd.append('|')
-        cmd.append('ssh -qp %i %s@%s' % (int(self.port), self.user, self.host))
-        #cmd.append('"tar xzf - -C %s"' % path.dirname(dest_path))
-        cmd.append('"mkdir -p %s && dd of=%s"' % (path.dirname(dest_path), dest_path))
-        if run(' '.join(cmd)).returncode != 0:
-            raise SaveError('Could not save file: %s' % dest_name)
-
-    def exist(self, name):
-        """
-        Check if file exists
-        """
-
-        full_path = self._get_dest_path(name)
-        p = self._ssh_cmd('ls %s 1> /dev/null 2> /dev/null' % full_path)
-        return True if p.returncode == 0 else False
-
-    def fetch(self, dest_path, name):
-        """
-        Restore file from ssh server
-        """
-
-        run(' '.join([
-            'ssh -qp %i %s@%s' % (int(self.port), self.user, self.host),
-            '"cat %s"' % self._get_dest_path(name),
-            '|',
-            'tar zxf - -C %s' % path.dirname(dest_path)
-        ]))
-
-    def _ssh_cmd(self, cmd):
-        """
-        Run a command over ssh
-        """
-
-        cmd = 'ssh -qp %i %s@%s "%s"' % (int(self.port), self.user, self.host, cmd)
-        return run(cmd)
-
-    def _get_dest_path(self, dest_name):
-        """
-        Return destination path from destination name
-        """
-
-        return '%s.tar.gz' % path.join(self.path, dest_name)
-
-
-def parse_url(url):
-    """
-    Parse url and return an instance of backend
-    """
-
-    parsed_url = urlparse(url)
-    
-    if parsed_url.scheme in ('', 'file'):
-        return LocalBackend(parsed_url.path)
-
-    if parsed_url.scheme == 'ssh':
-        (args, kwargs) = ([], {})       
-        netloc = parsed_url.netloc        
-
-        try:
-            (netloc, kwargs['port']) = netloc.split(':')
-        except ValueError:
-            pass
-
-        try:
-            (user, host) = netloc.split('@')
-            args.append(host)
-            args.append(user)
-        except ValueError, e:
-            raise URLError('No ssh username supplied')
-
-        args.append(parsed_url.path)
-        return SSHBackend(*args, **kwargs)
-
-    raise URLError('Scheme not supported: %s' % url)
 
 
 def main():
@@ -174,8 +46,10 @@ def main():
     """
 
     parser = OptionParser(usage=__USAGE__)
-    parser.add_option('-c', dest='conf', default='/etc/pgstore.conf',
-        help='A config file to load. [/etc/pgstore.conf]')
+    parser.add_option('-c', '--conf', dest='conf', default='/etc/pgstore.conf',
+        help='A config file to load. [%default]')
+    parser.add_option('-s', '--standby', dest='standby', action='store_true', default=False,
+        help='Put wal restore in recovery mode. i.e. wait for next wal file rather then quiting. [%default]')
     (options, args) = parser.parse_args()
 
     config = SafeConfigParser()
@@ -185,11 +59,6 @@ def main():
         data_directory = config.get('default', 'data_directory')
     except NoOptionError, e:
         data_directory = '/var/lib/postgresql/8.4/main'
-
-    try:
-        hba_file = config.get('default', 'hba_file')
-    except NoOptionError, e:
-        hba_file = '/etc/postgresql/8.4/main/pg_hba.conf'
 
     try:
         db_user = config.get('default', 'db_user')
@@ -204,115 +73,232 @@ def main():
 
     actions = {
         'archive-wal': archive_wal,   'restore-wal': restore_wal,
-        'archive-base': archive_base, 'restore-base': restore_base
+        'archive-base': archive_base, 'restore-base': restore_base,
     }
 
     try:
         action = args[0]
-        action_cmd = actions[action]
+        actions[action]
     except IndexError:
         parser.error('Need an action')
     except KeyError:
         parser.error('Action "%s" not recognised!' % action)
 
-    try:    
-        if action in ('archive-wal', 'archive-base'):
-            bkend = parse_url(archive_location)
-        else:
-            bkend = parse_url(restore_location)
-    except URLError, e:
-        parser.error(e)
-
-    if action in ('archive-wal', 'restore-wal'):
+    if action in ['archive-wal', 'restore-wal']:
         try:
             (file_name, file_path) = args[1:3]
+            file_path = path.join(data_directory, file_path)
         except ValueError:
             parser.error('Need [name] [path]!')
 
-        file_path = path.join(data_directory, file_path)
-        run_cmd(action_cmd, [file_path, file_name, bkend])
-
-    if action in ('archive-base', 'restore-base'):
+    if action in ['archive-base', 'restore-base']:
         try:
             ref = args[1]
         except IndexError:
             ref = None
 
-        run_cmd(action_cmd, [data_directory, bkend, db_user], {'ref': ref})
+    if action == 'archive-wal':
+        store_fs = getdir(fsopendir(archive_location), 'wal')
+        run_cmd(archive_wal, [file_path, file_name, store_fs])
+
+    if action == 'restore-wal':
+        store_fs = getdir(fsopendir(restore_location), 'wal')
+        args = [file_path, file_name, store_fs]
+        if options.standby:
+            run_cmd(restore_wal_standby, args)
+        else:
+            run_cmd(restore_wal, args)
+
+    if action == 'archive-base':
+        store_fs = getdir(fsopendir(archive_location), 'base')
+        run_cmd(archive_base, [data_directory, store_fs, db_user], {'ref': ref})
+
+    if action == 'restore-base':
+        store_fs = getdir(fsopendir(restore_location), 'base')
+        run_cmd(restore_base, [data_directory, store_fs, db_user], {'ref': ref})
+
+
+def getdir(store_fs, dir_name):
+    """
+    Try to open a dir on a fs. If it doesn't exist create it and return it
+    """
+
+    try:
+        return store_fs.opendir(dir_name)
+    except ResourceNotFoundError:
+        store_fs.makedir(dir_name)
+        return store_fs.opendir(dir_name)
 
 
 def run_cmd(cmd, args=[], kwargs={}):
     """
-    Run a command functon
+    Run a command
     """
 
     try:
         cmd(*args, **kwargs)
         exit(code=0)
-    except (SaveError, PGError), e:
+    except Exception, e:
         exit(e, code=1)
 
 
-def archive_wal(file_path, file_name, bkend):
+class Store(object):
+    def __init__(self, store_fs):
+        if not isinstance(store_fs, FS):
+            store_fs = fsopendir(store_fs)
+        self.store_fs = store_fs
+
+    def _get_path(self, ref):
+        return u'%s.bz2' % ref
+
+    def items(self):
+        return [path.splitext(i)[0] for i in self.store_fs.listdir()]
+
+    def exists(self, ref):
+        return self.store_fs.exists(self._get_path(ref))
+
+    def setcontents(self, ref, data):
+        self.store_fs.setcontents(self._get_path(ref), data)
+
+    def getcontents(self, ref):
+        return self.store_fs.getcontents(self._get_path(ref))
+
+    def remove(self, ref):
+        self.store_fs.remove(self._get_path(ref))
+
+    def batch_remove(self, keepAfter=None):
+        for ref in self.items():
+            if keepAfter and ref >= keepAfter:
+                continue
+            self.remove(ref)
+
+
+def archive_wal(file_path, file_name, store):
     """
-    Archive with backend
+    Archive wal file
     """
 
-    bkend.put(file_path, path.join('wal', file_name))
+    if not isinstance(store, Store):
+        store = Store(store)
+
+    if store.exists(file_name):
+        raise TransferError('Wal file "%s" already archived!' % file_name)
+
+    fh = open(file_path, 'rb')
+    try:
+        data = compress(fh.read(), 9)
+    finally:
+        fh.close()
+
+    store.setcontents(file_name, data)
 
 
-def restore_wal(file_path, file_name, bkend):
+def restore_wal(file_path, file_name, store):
     """
     Restore wal archive
     """
 
-    wal_name = path.join('wal', file_name)
-    ext = path.splitext(wal_name)[1]
+    if not isinstance(store, Store):
+        store = Store(store)
 
+    try:
+        data = store.getcontents(file_name)
+    except ResourceNotFoundError:
+        raise TransferError('Wal file "%s" not in archive!' % file_name)
+
+    fh = open(file_path, 'wb')
+    try:
+        fh.write(decompress(data))
+    finally:
+        fh.close()
+
+
+def restore_wal_standby(file_path, file_name, store, wait=0.5, max_wait=60):
+    """
+    Restore wal archive waiting if file not found
+    """
+
+    if not isinstance(store, Store):
+        store = Store(store)
+
+    ext = path.splitext(file_name)[1]
     if ext in ('.backup', '.history'):
-        if bkend.exist(wal_name):
-            bkend.fetch(file_path, wal_name)
-        return
+        return restore_wal(file_path, file_name, store)
 
     while True:
-        if bkend.exist(wal_name):
-            bkend.fetch(file_path, wal_name)
+        try:
+            data = store.getcontents(file_name)
+
+            fh = open(file_path, 'wb')
+            try:
+                fh.write(decompress(data))
+            finally:
+                fh.close()
+
             break
 
+        except ResourceNotFoundError:
+            pass
+
         if path.exists('/tmp/halt-postgres-recovery.tmp'):
-            raise PGError('Recovery halted')
+            raise PGError('Recovery halted!')
 
-        time.sleep(0.5)
+        time.sleep(wait)
+        wait *= 2
+        if wait > max_wait:
+            wait = max_wait
 
 
-def archive_base(data_dir, bkend, db_user, ref=None):
+def archive_base(data_dir, store, db_user, ref=None):
     """
-    Tar/gzip base data dir then archive with backend 
+    Tar/gzip base data dir then archive 
     """
+
+    if not isinstance(store, Store):
+        store = Store(store)
 
     if not ref:
         ref = str(time.strftime('%Y-%m-%d-%H:%M:%S', time.gmtime()))
 
     try:
         pg_cmd('SELECT * FROM pg_start_backup(\'%s\')' % ref, db_user)
-        name = path.join('base', ref)
-        bkend.put(data_dir, name, exclude='pg_xlog', overwrite=False)
+
+        tmpfile_name = mkstemp()[1]
+        tmpfile_obj = open(tmpfile_name, 'wb')
+        tar = tarfile.open(fileobj=tmpfile_obj, mode='w:bz2')
+        for filename in os.listdir(data_dir):
+            if filename != 'pg_xlog':
+                tar.add(path.join(data_dir, filename), arcname=filename)
+        tar.close()
+        tmpfile_obj.close()
+
+        fh = open(tmpfile_name, 'rb')
+        try:
+            data = fh.read()
+        finally:
+            fh.close()
+            os.remove(tmpfile_name)
+    
+        store.setcontents(ref, data)
         print('Created base archive: %s' % ref)
     finally:
         pg_cmd('SELECT * FROM pg_stop_backup()', db_user)
 
 
-def restore_base(data_dir, bkend, db_user, ref=None):
+def restore_base(data_dir, store, db_user, ref=None):
     """
     Restore base from archive
     """
 
-    if not ref:
-        raise SaveError('You must provide ref to restore from.')
+    if not isinstance(store, Store):
+        store = Store(store)
 
-    base_name = path.join('base', ref)
-    if not bkend.exist(base_name):
-        raise SaveError('Base archive does not exist: %s.' % ref)
+    if not ref:
+        print(store.items())
+        raise TransferError('You must provide ref to restore from.')
+
+    if not store.exists(ref):
+        raise TransferError('Base archive does not exist: %s.' % ref)
 
     run('service postgresql stop')
 
@@ -323,7 +309,19 @@ def restore_base(data_dir, bkend, db_user, ref=None):
         except OSError:
             rmtree(x)
 
-    bkend.fetch(data_dir, base_name)
+    data = store.getcontents(ref)
+
+    tmpfile_name = mkstemp()[1]
+    fh = open(tmpfile_name, 'wb')
+    try:
+        fh.write(data)
+    finally:
+        fh.close()
+
+    tar = tarfile.open(fileobj=open(tmpfile_name, 'rb'), mode='r:bz2')
+    tar.extractall(data_dir)
+    tar.close()
+    os.remove(tmpfile_name)
 
     xlog_path = path.join(data_dir, 'pg_xlog')
     pdb = pwd.getpwnam(db_user)
@@ -331,9 +329,11 @@ def restore_base(data_dir, bkend, db_user, ref=None):
     os.chown(xlog_path, pdb[2], pdb[3])
 
     recovery_path = path.join(data_dir, 'recovery.conf')
-    f = open(recovery_path, 'w')
-    f.write("restore_command = '/usr/local/bin/pgstore restore-wal %f %p'")
-    f.close()
+    fh = open(recovery_path, 'w')
+    try:
+        fh.write("restore_command = '/usr/local/bin/pgstore restore-wal --standby %f %p'\n")
+    finally:
+        fh.close()
     os.chown(recovery_path, pdb[2], pdb[3])
 
     try:
