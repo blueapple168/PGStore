@@ -158,7 +158,9 @@ class Store(object):
         return self.store_fs.exists(self._get_path(ref))
 
     def setcontents(self, ref, data):
-        self.store_fs.setcontents(self._get_path(ref), data)
+        tmp_name = u'%s.tmp' % ref
+        self.store_fs.setcontents(tmp_name, data)
+        self.store_fs.rename(tmp_name, self._get_path(ref))
 
     def getcontents(self, ref):
         return self.store_fs.getcontents(self._get_path(ref))
