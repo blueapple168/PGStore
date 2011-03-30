@@ -18,7 +18,7 @@ import time
 import tarfile
 from os import path
 from tempfile import mkstemp
-from ConfigParser import SafeConfigParser, NoOptionError
+from ConfigParser import SafeConfigParser, NoOptionError, NoSectionError
 from optparse import OptionParser
 from shutil import rmtree
 from bz2 import compress, decompress
@@ -70,6 +70,12 @@ def main():
         archive_location = config.get('default', 'archive_location')
     except NoOptionError, e:
         parser.error(e)
+
+    try:
+        for env in config.options('env'):
+            os.environ[env.upper()] = config.get('env', env)
+    except NoSectionError:
+        pass
 
     actions = {
         'archive-wal': archive_wal,   'restore-wal': restore_wal,
