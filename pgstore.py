@@ -5,7 +5,7 @@
 __USAGE__ = """%prog [action]
     archive-wal [name] [path]
     restore-wal [name] [path]
-    archive-base
+    archive-base [ref]
     restore-base [ref]"""
 
 
