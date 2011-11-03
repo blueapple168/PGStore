@@ -6,7 +6,8 @@ __USAGE__ = """%prog [action]
     archive-wal [name] [path]
     restore-wal [name] [path]
     archive-base [ref]
-    restore-base [ref]"""
+    restore-base [ref]
+    batch-remove [keep_after]"""
 
 
 import os
@@ -80,6 +81,7 @@ def main():
     actions = {
         'archive-wal': archive_wal,   'restore-wal': restore_wal,
         'archive-base': archive_base, 'restore-base': restore_base,
+        'batch-remove': batch_remove,
     }
 
     try:
@@ -97,7 +99,7 @@ def main():
         except ValueError:
             parser.error('Need [name] [path]!')
 
-    if action in ['archive-base', 'restore-base']:
+    if action in ['archive-base', 'restore-base', 'batch-remove']:
         try:
             ref = args[1]
         except IndexError:
@@ -123,6 +125,9 @@ def main():
         store_fs = getdir(fsopendir(restore_location), 'base')
         run_cmd(restore_base, [data_directory, store_fs, db_user], {'ref': ref})
 
+    if action == 'batch-remove':
+        store_fs = getdir(fsopendir(archive_location), 'wal')
+        run_cmd(batch_remove, [store_fs], {'ref': ref})
 
 def getdir(store_fs, dir_name):
     """
@@ -174,11 +179,25 @@ class Store(object):
     def remove(self, ref):
         self.store_fs.remove(self._get_path(ref))
 
-    def batch_remove(self, keepAfter=None):
+    def batch_remove(self, keep_after=None):
         for ref in self.items():
-            if keepAfter and ref >= keepAfter:
+            if keep_after and ref >= keep_after:
                 continue
             self.remove(ref)
+
+
+def batch_remove(store, ref=None):
+    """
+    Batch remove wall archives from store
+    """
+
+    if not isinstance(store, Store):
+        store = Store(store)
+
+    if not store.exists(ref):
+        raise TransferError('The file "%s" is not in archive!' % ref)
+
+    store.batch_remove(ref)
 
 
 def archive_wal(file_path, file_name, store):
