@@ -308,6 +308,7 @@ def archive_base(data_dir, store, db_user, ref=None):
     
         store.setcontents(ref, data)
         print('Created base archive: %s' % ref)
+        print(open('%s/backup_label' % data_dir, 'r').read())
     finally:
         pg_cmd('SELECT * FROM pg_stop_backup()', db_user)
 
